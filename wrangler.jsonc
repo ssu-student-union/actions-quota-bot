@@ -1,6 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "actions-quota-bot",
+  // 공용 Cloudflare 계정 (비밀값 아님. CI에서 계정을 고르는 데 씀)
+  "account_id": "b39c44e4a2705b129ec1fc8fc39c58fa",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "observability": { "enabled": true },

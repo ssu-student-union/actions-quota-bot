@@ -27,7 +27,7 @@ Cloudflare Workers에서 매시 정각에 돌고, 한도는 GitHub Billing → B
 ## 배포
 
 `main`에 push하면 GitHub Actions가 배포합니다 (public 레포라 무료).
-GitHub secrets: `CLOUDFLARE_API_TOKEN` (Workers + D1 Edit), `CLOUDFLARE_ACCOUNT_ID`.
+GitHub secret: `CLOUDFLARE_API_TOKEN` (Workers + D1 Edit).
 
 명령 정의(`src/definitions.ts`)를 바꾸면 `pnpm register`를 직접 실행합니다.
 
