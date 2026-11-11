@@ -1,8 +1,7 @@
 import { linkButton, row, sendChannelMessage, type Button, type Embed } from "./discord.ts";
 import { actionsUrl, budgetsUrl } from "./github.ts";
-import { barImage, COLOR, colorFor, dotFor, esc, freeForecast, mins, pct, UNASSIGNED, usd, usdBudget } from "./format.ts";
-import { allRoles, mentionRoles } from "./roles.ts";
-import { subButton, subscribersFor } from "./subscriptions.ts";
+import { barImage, COLOR, colorFor, dotFor, esc, freeForecast, mins, pct, usd, usdBudget } from "./format.ts";
+import { orgSubButton, repoSubButton, subscribersFor } from "./subscriptions.ts";
 import type { Env, Snapshot } from "./types.ts";
 
 interface Candidate {
@@ -11,11 +10,9 @@ interface Candidate {
   /** 지금 넘어선 모든 단계 */
   levels: number[];
   render: (level: number) => Embed;
-  /** 알림 아래에 붙일 링크 버튼 */
+  /** 알림 아래에 붙일 버튼 */
   buttons?: Button[];
-  /** 이 단계의 알림이 역할을 태그할 만큼 중요한지 */
-  critical: (level: number) => boolean;
-  /** 레포 알림이면 레포 이름 (frontend/backend 태그를 고를 때 씀) */
+  /** 레포 알림이면 레포 이름, 없으면 전체 사용량 알림 (구독자를 찾는 데 씀) */
   repo?: string;
 }
 
@@ -29,7 +26,7 @@ export const thresholds = (env: Env) =>
 const crossed = (p: number, ts: number[]) => ts.filter((t) => p >= t);
 
 /** 스냅샷에서 알림 후보를 만든다 (이미 보낸 것인지는 아직 따지지 않음) */
-export function candidates(env: Env, snap: Snapshot, teams: Map<string, string>): Candidate[] {
+export function candidates(env: Env, snap: Snapshot): Candidate[] {
   const ts = thresholds(env);
   const out: Candidate[] = [];
   const link = budgetsUrl(env);
@@ -39,7 +36,7 @@ export function candidates(env: Env, snap: Snapshot, teams: Map<string, string>)
     month: snap.month,
     scope: "org-free",
     levels: crossed(freeP, ts),
-    critical: (level) => level >= 100, // 무료 분 소진
+    buttons: [orgSubButton()],
     render: (level) => ({
       title: level >= 100 ? "🔴 무료 분을 모두 소진했습니다" : `${dotFor(level)} 무료 분의 ${level}%를 사용했습니다`,
       url: link,
@@ -57,7 +54,6 @@ export function candidates(env: Env, snap: Snapshot, teams: Map<string, string>)
   });
 
   for (const r of snap.repos) {
-    const team = teams.get(r.name) ?? UNASSIGNED;
     if (r.budget !== null && r.budget > 0) {
       const budget = r.budget;
       const p = pct(r.net, budget);
@@ -66,11 +62,10 @@ export function candidates(env: Env, snap: Snapshot, teams: Map<string, string>)
         scope: `budget:${r.name}`,
         repo: r.name,
         levels: crossed(p, ts),
-        critical: (level) => level >= 100, // Actions 정지 / 예산 초과
         buttons: [
           linkButton("예산 늘리기", link, "💰"),
           linkButton("Actions 실행 기록", actionsUrl(env, r.name), "📜"),
-          subButton("repo", r.name, "이 레포 알림 받기"),
+          repoSubButton(r.name),
         ],
         render: (level) => ({
           title:
@@ -82,7 +77,6 @@ export function candidates(env: Env, snap: Snapshot, teams: Map<string, string>)
           url: link,
           description: [
             `## ${Math.floor(p)}%`,
-            `-# ${team}`,
             level >= 100
               ? r.stop
                 ? `예산 ${usdBudget(budget)}를 모두 사용했습니다.\nGitHub에서 예산을 늘리면 다시 실행됩니다.`
@@ -102,16 +96,15 @@ export function candidates(env: Env, snap: Snapshot, teams: Map<string, string>)
         scope: `nobudget-paid:${r.name}`,
         repo: r.name,
         levels: [1],
-        critical: () => true, // 멈추지 않고 과금 중
         buttons: [
           linkButton("예산 설정하러 가기", link, "💰"),
           linkButton("Actions 실행 기록", actionsUrl(env, r.name), "📜"),
-          subButton("repo", r.name, "이 레포 알림 받기"),
+          repoSubButton(r.name),
         ],
         render: () => ({
           title: `⚠️ ${r.name} 레포에서 예산 없이 과금되고 있습니다`,
           url: link,
-          description: `## ${usd(r.net)}\n예산이 없어\n사용량이 급증해도 정지되지 않습니다.\n-# ${team}`,
+          description: `## ${usd(r.net)}\n예산이 없어\n사용량이 급증해도 정지되지 않습니다.`,
           color: COLOR.orange,
         }),
       });
@@ -125,7 +118,7 @@ function unbudgetedWorkflowRepos(snap: Snapshot) {
   return snap.repos.filter((r) => r.budget === null && (r.workflows ?? 0) > 0);
 }
 
-export async function processAlerts(env: Env, snap: Snapshot, teams: Map<string, string>) {
+export async function processAlerts(env: Env, snap: Snapshot) {
   const { results } = await env.DB.prepare("SELECT month, scope, level FROM alerts WHERE month IN (?, 'once')")
     .bind(snap.month)
     .all<{ month: string; scope: string; level: number }>();
@@ -133,10 +126,10 @@ export async function processAlerts(env: Env, snap: Snapshot, teams: Map<string,
   const isSent = (month: string, scope: string, level: number) => sent.has(`${month}|${scope}|${level}`);
 
   type Rec = { month: string; scope: string; level: number };
-  /** repos: 이 알림과 관련된 레포 (구독자를 찾는 데 씀) */
-  const items: { embed: Embed; buttons?: Button[]; roles?: string[]; repos: string[]; records: Rec[] }[] = [];
+  /** repos가 null이면 전체 사용량 알림, 아니면 그 레포들 알림 (구독자를 찾는 데 씀) */
+  const items: { embed: Embed; buttons?: Button[]; repos: string[] | null; records: Rec[] }[] = [];
 
-  for (const c of candidates(env, snap, teams)) {
+  for (const c of candidates(env, snap)) {
     const fresh = c.levels.filter((l) => !isSent(c.month, c.scope, l));
     if (fresh.length === 0) continue;
     const top = Math.max(...fresh);
@@ -144,8 +137,7 @@ export async function processAlerts(env: Env, snap: Snapshot, teams: Map<string,
     items.push({
       embed: c.render(top),
       buttons: c.buttons,
-      roles: c.critical(top) ? mentionRoles(env, c.repo) : [],
-      repos: c.repo ? [c.repo] : [],
+      repos: c.repo ? [c.repo] : null,
       records: [top, ...fresh.filter((l) => l !== top)].map((level) => ({ month: c.month, scope: c.scope, level })),
     });
   }
@@ -158,7 +150,7 @@ export async function processAlerts(env: Env, snap: Snapshot, teams: Map<string,
       title: `⚠️ 예산이 설정되지 않은 레포가 ${wf.length}개 있습니다`,
       url: budgetsUrl(env),
       description: [
-        ...wf.map((r) => `**${esc(r.name)}** · ${teams.get(r.name) ?? UNASSIGNED}`),
+        ...wf.map((r) => `**${esc(r.name)}** · 워크플로 ${r.workflows}개`),
         "",
         "-# 워크플로가 있어, 무료 분을 소진한 뒤 실행되면 제한 없이 과금됩니다.",
       ].join("\n"),
@@ -203,14 +195,13 @@ export async function processAlerts(env: Env, snap: Snapshot, teams: Map<string,
     const claimed = item.records[0].month === "once" ? mine.length > 0 : results[0].meta.changes > 0;
     if (!claimed) continue;
     try {
-      // 중요한 알림은 역할을, 구독한 사람은 단계와 상관없이 그 레포 알림마다 멘션한다
-      const users = await subscribersFor(env, item.repos, teams);
-      const mentions = [...(item.roles ?? []).map((r) => `<@&${r}>`), ...users.map((u) => `<@${u}>`)];
+      // 구독한 사람만 멘션한다 (전체 사용량 알림 → 전체 구독자, 레포 알림 → 그 레포 구독자)
+      const users = await subscribersFor(env, item.repos === null ? { org: true } : { repos: item.repos });
       await sendChannelMessage(env, env.ALERT_CHANNEL_ID, {
-        content: mentions.length ? mentions.join(" ") : undefined,
+        content: users.length ? users.map((u) => `<@${u}>`).join(" ") : undefined,
         embeds: [item.embed],
         components: item.buttons?.length ? [row(...item.buttons)] : undefined,
-        allowed_mentions: { roles: allRoles(env), users },
+        allowed_mentions: { users },
       });
       sentCount++;
     } catch (e) {

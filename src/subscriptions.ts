@@ -1,28 +1,22 @@
-// 개인 알림 구독. 레포 / TF / 파트(frontend·backend) 단위로 구독하면,
-// 해당하는 레포 알림이 나갈 때 그 사람을 멘션한다.
+// 개인 알림 구독. 전체 사용량(무료 분 알림) 또는 레포 단위로 구독하면, 해당 알림이 나갈 때 멘션한다.
 import { actionButton, type Button } from "./discord.ts";
-import { UNASSIGNED } from "./format.ts";
-import { partOf, type Part } from "./roles.ts";
 import type { Env } from "./types.ts";
 
-export type Kind = "repo" | "team" | "part";
-export const PART_LABEL: Record<Part, string> = { frontend: "프론트엔드", backend: "백엔드" };
+export type Kind = "org" | "repo";
+const ORG_TARGET = "all";
 
-/** 버튼 custom_id: "sub:<kind>:<target>" */
+/** 버튼 custom_id: "sub:org:all" / "sub:repo:<레포>" */
 export const SUB_PREFIX = "sub:";
-export const subButton = (kind: Kind, target: string, label: string): Button =>
-  actionButton(label, `${SUB_PREFIX}${kind}:${target}`.slice(0, 100), "🔔");
+export const orgSubButton = (): Button => actionButton("전체 사용량 구독하기", `${SUB_PREFIX}org:${ORG_TARGET}`, "🔔");
+export const repoSubButton = (repo: string): Button =>
+  actionButton("이 레포 구독하기", `${SUB_PREFIX}repo:${repo}`.slice(0, 100), "🔔");
 
 export function parseSubId(customId: string): { kind: Kind; target: string } | null {
-  const m = customId.match(/^sub:(repo|team|part):(.+)$/);
+  const m = customId.match(/^sub:(org|repo):(.+)$/);
   return m ? { kind: m[1] as Kind, target: m[2] } : null;
 }
 
-export function describe(kind: Kind, target: string) {
-  if (kind === "part") return `${PART_LABEL[target as Part] ?? target} 전체`;
-  if (kind === "team") return `${target} TF`;
-  return `${target} 레포`;
-}
+export const describe = (kind: Kind, target: string) => (kind === "org" ? "전체 사용량" : `${target} 레포`);
 
 /** 구독 상태를 뒤집는다. 구독하게 됐으면 true */
 export async function toggle(env: Env, userId: string, kind: Kind, target: string): Promise<boolean> {
@@ -36,37 +30,25 @@ export async function toggle(env: Env, userId: string, kind: Kind, target: strin
   return true;
 }
 
+export const toggleOrg = (env: Env, userId: string) => toggle(env, userId, "org", ORG_TARGET);
+
 export async function listFor(env: Env, userId: string) {
-  const { results } = await env.DB.prepare(
-    "SELECT kind, target FROM subscriptions WHERE user_id = ? ORDER BY kind, target",
-  )
+  const { results } = await env.DB.prepare("SELECT kind, target FROM subscriptions WHERE user_id = ? ORDER BY kind, target")
     .bind(userId)
     .all<{ kind: Kind; target: string }>();
   return results;
 }
 
-/**
- * 이 레포들 알림을 받을 사람들. 레포·TF·파트 중 하나라도 맞으면 포함.
- * 파트를 알 수 없는 레포는 frontend·backend 구독자 모두에게 (역할 태그와 같은 규칙).
- */
-export async function subscribersFor(env: Env, repos: string[], teams: Map<string, string>): Promise<string[]> {
-  if (repos.length === 0) return [];
-  const { results } = await env.DB.prepare("SELECT user_id, kind, target FROM subscriptions").all<{
-    user_id: string;
-    kind: Kind;
-    target: string;
-  }>();
-  const users = new Set<string>();
-  for (const repo of repos) {
-    const team = teams.get(repo) ?? UNASSIGNED;
-    const part = partOf(repo);
-    for (const s of results) {
-      const hit =
-        (s.kind === "repo" && s.target === repo) ||
-        (s.kind === "team" && s.target === team) ||
-        (s.kind === "part" && (part === null || s.target === part));
-      if (hit) users.add(s.user_id);
-    }
+/** 알림을 받을 사람들: org 알림이면 전체 사용량 구독자, 레포 알림이면 그 레포 구독자 */
+export async function subscribersFor(env: Env, target: { org: true } | { repos: string[] }): Promise<string[]> {
+  if ("org" in target) {
+    const { results } = await env.DB.prepare("SELECT DISTINCT user_id FROM subscriptions WHERE kind = 'org'").all<{ user_id: string }>();
+    return results.map((r) => r.user_id);
   }
-  return [...users];
+  if (target.repos.length === 0) return [];
+  const marks = target.repos.map(() => "?").join(", ");
+  const { results } = await env.DB.prepare(`SELECT DISTINCT user_id FROM subscriptions WHERE kind = 'repo' AND target IN (${marks})`)
+    .bind(...target.repos)
+    .all<{ user_id: string }>();
+  return results.map((r) => r.user_id);
 }

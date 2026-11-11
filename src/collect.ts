@@ -89,8 +89,3 @@ export async function loadSnapshot(env: Env): Promise<Snapshot | null> {
   const row = await env.DB.prepare("SELECT value FROM kv WHERE key = 'snapshot'").first<{ value: string }>();
   return row ? (JSON.parse(row.value) as Snapshot) : null;
 }
-
-export async function loadTeams(env: Env): Promise<Map<string, string>> {
-  const { results } = await env.DB.prepare("SELECT repo, team FROM repo_team").all<{ repo: string; team: string }>();
-  return new Map(results.map((r) => [r.repo, r.team]));
-}

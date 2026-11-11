@@ -6,11 +6,6 @@ export interface Env {
   FREE_MINUTES: string;
   ALERT_THRESHOLDS: string;
   ALERT_CHANNEL_ID: string;
-  ALERT_MENTION_ROLE_ID: string;
-  /** 중요한 알림 때 레포 파트에 따라 태그할 역할 */
-  FRONTEND_ROLE_ID: string;
-  BACKEND_ROLE_ID: string;
-  ADMIN_ROLE_ID: string;
   /** 수집 실패 알림 때 멘션할 사용자 ID (봇 관리자) */
   FAILURE_MENTION_USER_ID: string;
   // secrets

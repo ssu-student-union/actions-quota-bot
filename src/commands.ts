@@ -1,9 +1,9 @@
 import { processAlerts } from "./alerts.ts";
-import { collect, loadSnapshot, loadTeams, saveSnapshot } from "./collect.ts";
+import { collect, loadSnapshot, saveSnapshot } from "./collect.ts";
 import { actionButton, editOriginal, EPHEMERAL, json, row, select, type MessageBody } from "./discord.ts";
 import { reportRecovery } from "./health.ts";
-import { describe, listFor, parseSubId, PART_LABEL, SUB_PREFIX, subButton, toggle, type Kind } from "./subscriptions.ts";
-import { overviewEmbeds, repoEmbed, teamEmbed, teamListEmbed, teamOptions, UNASSIGNED } from "./format.ts";
+import { overviewEmbeds, repoEmbed, repoOptions } from "./format.ts";
+import { describe, listFor, orgSubButton, parseSubId, repoSubButton, SUB_PREFIX, toggle, toggleOrg, type Kind } from "./subscriptions.ts";
 import type { Env, Snapshot } from "./types.ts";
 
 const T = { PING: 1, COMMAND: 2, COMPONENT: 3, AUTOCOMPLETE: 4 } as const;
@@ -21,7 +21,7 @@ export interface Interaction {
   type: number;
   token: string;
   data?: { name: string; options?: Option[]; custom_id?: string; values?: string[] };
-  member?: { roles: string[]; permissions: string; user?: { id: string } };
+  member?: { user?: { id: string } };
   user?: { id: string };
 }
 
@@ -30,247 +30,144 @@ export async function runSync(env: Env, now = new Date()): Promise<Snapshot> {
   const snap = await collect(env, now);
   await saveSnapshot(env, snap);
   await reportRecovery(env);
-  const teams = await loadTeams(env);
-  const result = await processAlerts(env, snap, teams);
+  const result = await processAlerts(env, snap);
   console.log(`sync ${snap.month}: ${Math.round(snap.usedMinutes)}분, $${snap.net.toFixed(2)}, 알림 ${JSON.stringify(result)}`);
 
   // GitHub 데이터는 몇 시간 늦게 들어오므로, 매월 1일에는 지난달 마지막 몇 시간치도 다시 확인한다
   if (now.getUTCDate() === 1) {
     const endOfLastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1) - 1);
     const prev = await collect(env, endOfLastMonth);
-    const prevResult = await processAlerts(env, prev, teams);
+    const prevResult = await processAlerts(env, prev);
     console.log(`sync ${prev.month} (지난달 재확인): 알림 ${JSON.stringify(prevResult)}`);
   }
   return snap;
 }
 
 const REFRESH = "refresh";
-const TEAM_SELECT = "team-select";
+const REPO_SELECT = "repo-select";
 /** 새로고침을 연타해도 GitHub를 매번 부르지 않도록, 최근 수집이 이보다 새로우면 그대로 쓴다 */
 const REFRESH_MIN_INTERVAL_MS = 60_000;
 
-/** /usage 전체 현황 메시지 (새로고침 버튼 포함) */
-async function overviewMessage(env: Env, snap: Snapshot): Promise<MessageBody> {
-  const teams = await loadTeams(env);
-  const options = teamOptions(snap, teams);
+/** /usage 메시지: 레포 드롭다운 + 새로고침 + 전체 사용량 구독 */
+function overviewMessage(env: Env, snap: Snapshot): MessageBody {
+  const options = repoOptions(snap);
   return {
-    embeds: overviewEmbeds(env, snap, teams),
+    embeds: overviewEmbeds(env, snap),
     components: [
-      ...(options.length ? [row(select(TEAM_SELECT, "TF 자세히 보기", options))] : []),
-      row(
-        actionButton("새로고침", REFRESH, "🔄"),
-        subButton("part", "frontend", "프론트엔드 알림 받기"),
-        subButton("part", "backend", "백엔드 알림 받기"),
-      ),
+      ...(options.length ? [row(select(REPO_SELECT, "레포 자세히 보기", options))] : []),
+      row(actionButton("새로고침", REFRESH, "🔄"), orgSubButton()),
     ],
   };
 }
 
-/** TF 상세 메시지 (구독 버튼 포함) */
-function teamMessage(env: Env, snap: Snapshot, teams: Map<string, string>, team: string): MessageBody | null {
-  const embed = teamEmbed(env, snap, teams, team);
-  return embed ? { embeds: [embed], components: [row(subButton("team", team, "이 TF 알림 받기"))] } : null;
-}
-
-/** 레포 상세 메시지 (구독 버튼 포함) */
-function repoMessage(env: Env, snap: Snapshot, teams: Map<string, string>, repo: string): MessageBody | null {
-  const embed = repoEmbed(env, snap, teams, repo);
-  const name = snap.repos.find((r) => r.name.toLowerCase() === repo.toLowerCase())?.name ?? repo;
-  return embed ? { embeds: [embed], components: [row(subButton("repo", name, "이 레포 알림 받기"))] } : null;
-}
+// 명령 응답은 모두 본인만 보인다. 채널에 공개되는 건 자동 알림뿐
+const ephemeral = (body: MessageBody) => json({ type: R.MESSAGE, data: { ...body, flags: EPHEMERAL } });
+const error = (content: string) => ephemeral({ content });
 
 const userOf = (i: Interaction) => i.member?.user?.id ?? i.user?.id;
 
 async function toggleReply(env: Env, i: Interaction, kind: Kind, target: string) {
   const user = userOf(i);
   if (!user) return error("사용자를 확인하지 못했습니다.");
-  const on = await toggle(env, user, kind, target);
-  return reply({
+  const on = kind === "org" ? await toggleOrg(env, user) : await toggle(env, user, kind, target);
+  const what = describe(kind, target);
+  return ephemeral({
     content: on
-      ? `🔔 **${describe(kind, target)}** 알림을 받습니다.\n-# 해당 레포 알림이 올 때 멘션됩니다. 다시 누르면 해제됩니다.`
-      : `🔕 **${describe(kind, target)}** 알림을 더 이상 받지 않습니다.`,
-    flags: EPHEMERAL,
+      ? `🔔 **${what}**을(를) 구독했습니다. 관련 알림이 오면 멘션해 드립니다.\n-# 다시 누르면 구독이 해제됩니다.`
+      : `🔕 **${what}** 구독을 해제했습니다.`,
   });
 }
 
-const reply = (body: MessageBody) => json({ type: R.MESSAGE, data: body });
-const error = (content: string) => reply({ content, flags: EPHEMERAL });
-
-function flatten(options: Option[] = []): { sub?: string; args: Map<string, Option> } {
-  const sub = options.find((o) => o.type === 1);
-  const list = sub ? (sub.options ?? []) : options;
-  return { sub: sub?.name, args: new Map(list.map((o) => [o.name, o])) };
-}
-
-const MANAGE_GUILD = 0x20n;
-const ADMINISTRATOR = 0x8n;
-function isAdmin(env: Env, i: Interaction) {
-  if (!i.member) return false;
-  if (env.ADMIN_ROLE_ID && i.member.roles.includes(env.ADMIN_ROLE_ID)) return true;
-  const perms = BigInt(i.member.permissions ?? "0");
-  return (perms & (MANAGE_GUILD | ADMINISTRATOR)) !== 0n;
-}
-
-/** 시간이 걸리는 작업은 먼저 "생각 중" 응답을 보내고 나중에 메시지를 채운다 */
-function deferred(
-  env: Env,
-  ctx: ExecutionContext,
-  i: Interaction,
-  work: () => Promise<MessageBody>,
-  { ephemeral = false } = {},
-) {
+/** 시간이 걸리는 작업은 먼저 "생각 중" 응답(본인만 보임)을 보내고 나중에 메시지를 채운다 */
+function deferred(env: Env, ctx: ExecutionContext, i: Interaction, work: () => Promise<MessageBody>) {
   ctx.waitUntil(
     work()
       .catch((e: Error) => ({ content: `❌ 실패했습니다: ${e.message.slice(0, 1500)}` }))
       .then((body) => editOriginal(env, i.token, body))
       .catch((e) => console.error("editOriginal failed", e)),
   );
-  // 지연 응답의 공개 여부는 여기서 정해지고, 나중에 채우는 메시지도 그대로 따른다
-  return json({ type: R.DEFERRED, data: ephemeral ? { flags: EPHEMERAL } : {} });
+  return json({ type: R.DEFERRED, data: { flags: EPHEMERAL } });
 }
 
 export async function handleInteraction(env: Env, ctx: ExecutionContext, i: Interaction): Promise<Response> {
   if (i.type === T.PING) return json({ type: R.PONG });
   if (i.type === T.AUTOCOMPLETE) return autocomplete(env, i);
-  if (i.type === T.COMPONENT && i.data?.custom_id === TEAM_SELECT) {
-    // 고른 TF 상세는 고른 사람에게만 보여 준다 (원래 메시지는 그대로)
-    const team = i.data.values?.[0];
-    const snap = await loadSnapshot(env);
-    const msg = team && snap ? teamMessage(env, snap, await loadTeams(env), team) : null;
-    return msg ? reply({ ...msg, flags: EPHEMERAL }) : error("TF를 찾지 못했습니다.");
-  }
-  if (i.type === T.COMPONENT && i.data?.custom_id?.startsWith(SUB_PREFIX)) {
-    const sub = parseSubId(i.data.custom_id);
-    return sub ? toggleReply(env, i, sub.kind, sub.target) : error("알 수 없는 버튼입니다.");
-  }
-  if (i.type === T.COMPONENT && i.data?.custom_id === REFRESH) {
-    // 버튼이 달린 메시지를 그 자리에서 갱신한다
-    ctx.waitUntil(
-      (async () => {
-        const last = await loadSnapshot(env);
-        const fresh = last && Date.now() - Date.parse(last.syncedAt) < REFRESH_MIN_INTERVAL_MS;
-        await editOriginal(env, i.token, await overviewMessage(env, fresh ? last : await runSync(env)));
-      })().catch((e) => console.error("refresh failed", e)),
-    );
-    return json({ type: R.DEFERRED_UPDATE });
-  }
-  if (i.type !== T.COMMAND || !i.data) return error("알 수 없는 요청입니다.");
 
-  const { sub, args } = flatten(i.data.options);
-  const arg = (name: string) => args.get(name)?.value?.trim();
+  if (i.type === T.COMPONENT) {
+    const id = i.data?.custom_id ?? "";
+    if (id === REPO_SELECT) {
+      const repo = i.data?.values?.[0];
+      const snap = await loadSnapshot(env);
+      const embed = repo && snap ? repoEmbed(env, snap, repo) : null;
+      return embed
+        ? ephemeral({ embeds: [embed], components: [row(repoSubButton(repo!))] })
+        : error("레포를 찾지 못했습니다.");
+    }
+    if (id === REFRESH) {
+      // 버튼이 달린 메시지를 그 자리에서 갱신한다
+      ctx.waitUntil(
+        (async () => {
+          const last = await loadSnapshot(env);
+          const fresh = last && Date.now() - Date.parse(last.syncedAt) < REFRESH_MIN_INTERVAL_MS;
+          await editOriginal(env, i.token, overviewMessage(env, fresh ? last : await runSync(env)));
+        })().catch((e) => console.error("refresh failed", e)),
+      );
+      return json({ type: R.DEFERRED_UPDATE });
+    }
+    if (id.startsWith(SUB_PREFIX)) {
+      const sub = parseSubId(id);
+      return sub ? toggleReply(env, i, sub.kind, sub.target) : error("알 수 없는 버튼입니다.");
+    }
+    return error("알 수 없는 버튼입니다.");
+  }
+
+  if (i.type !== T.COMMAND || !i.data) return error("알 수 없는 요청입니다.");
+  const sub = i.data.options?.find((o) => o.type === 1);
 
   switch (i.data.name) {
     case "usage": {
       const snap = await loadSnapshot(env);
-      const render = async (s: Snapshot): Promise<MessageBody> => {
-        const teams = await loadTeams(env);
-        const repo = arg("repo");
-        const team = arg("team");
-        if (!repo && !team) return overviewMessage(env, s);
-        const msg = repo ? repoMessage(env, s, teams, repo) : teamMessage(env, s, teams, team!);
-        return msg ?? { content: `\`${repo ?? team}\`을(를) 찾지 못했습니다.` };
-      };
-      // 명령 응답은 모두 본인만 보인다. 채널에 공개되는 건 자동 알림뿐
-      if (!snap) return deferred(env, ctx, i, async () => render(await runSync(env)), { ephemeral: true });
-      return reply({ ...(await render(snap)), flags: EPHEMERAL });
+      // 아직 한 번도 수집하지 않았으면 지금 수집
+      if (!snap) return deferred(env, ctx, i, async () => overviewMessage(env, await runSync(env)));
+      return ephemeral(overviewMessage(env, snap));
     }
 
     case "sync":
-      return deferred(
-        env,
-        ctx,
-        i,
-        async () => {
-          return overviewMessage(env, await runSync(env));
-        },
-        { ephemeral: true },
-      );
+      return deferred(env, ctx, i, async () => overviewMessage(env, await runSync(env)));
 
     case "subscribe": {
-      if (sub === "list") {
-        const user = userOf(i);
-        const subs = user ? await listFor(env, user) : [];
-        const group = (k: Kind) => subs.filter((s) => s.kind === k).map((s) => (k === "part" ? PART_LABEL[s.target as "frontend"] ?? s.target : s.target));
-        const lines = (
-          [
-            ["파트", group("part")],
-            ["TF", group("team")],
-            ["레포", group("repo")],
-          ] as const
-        )
-          .filter(([, v]) => v.length)
-          .map(([k, v]) => `**${k}** · ${v.join(", ")}`);
-        return reply({
-          content: lines.length
-            ? `🔔 구독 중인 알림\n${lines.join("\n")}\n-# 같은 대상으로 \`/subscribe\`를 다시 쓰면 해제됩니다.`
-            : "구독 중인 알림이 없습니다.\n-# `/subscribe`나 알림의 🔔 버튼으로 구독할 수 있습니다.",
-          flags: EPHEMERAL,
-        });
-      }
-      const target = sub === "part" ? arg("part") : sub === "team" ? arg("team") : arg("repo");
-      if (!target || (sub !== "repo" && sub !== "team" && sub !== "part")) return error("명령을 이해하지 못했습니다.");
-      if (sub === "repo") {
+      if (sub?.name === "all") return toggleReply(env, i, "org", "all");
+      if (sub?.name === "repo") {
+        const name = sub.options?.find((o) => o.name === "repo")?.value?.trim() ?? "";
         const snap = await loadSnapshot(env);
-        const known = snap?.repos.find((r) => r.name.toLowerCase() === target.toLowerCase());
-        if (!known) return error(`\`${target}\` 레포를 찾지 못했습니다.`);
-        return toggleReply(env, i, "repo", known.name);
+        const known = snap?.repos.find((r) => r.name.toLowerCase() === name.toLowerCase());
+        return known ? toggleReply(env, i, "repo", known.name) : error(`\`${name}\` 레포를 찾지 못했습니다.`);
       }
-      return toggleReply(env, i, sub, target);
-    }
-
-    case "team": {
-      if (sub === "list") {
-        const [snap, teams] = await Promise.all([loadSnapshot(env), loadTeams(env)]);
-        return reply({ embeds: [teamListEmbed(snap, teams)], flags: EPHEMERAL });
-      }
-      if (!isAdmin(env, i)) return error("TF 설정은 운영진만 바꿀 수 있습니다.");
-      const repo = arg("repo");
-      const team = arg("team");
-      const newName = sub === "rename" ? arg("name") : team;
-      if (newName === UNASSIGNED) return error(`'${UNASSIGNED}'은 TF 이름으로 쓸 수 없습니다. 배정을 빼려면 \`/team unassign\`을 쓰시기 바랍니다.`);
-      if (sub === "assign" && repo && team) {
-        const snap = await loadSnapshot(env);
-        const known = snap?.repos.find((r) => r.name.toLowerCase() === repo.toLowerCase());
-        const name = known?.name ?? repo;
-        await env.DB.prepare("INSERT OR REPLACE INTO repo_team (repo, team) VALUES (?, ?)").bind(name, team).run();
-        const warn = known ? "" : "\n-# 최근 수집 결과에 없는 레포입니다. 이름이 맞는지 확인해 주시기 바랍니다.";
-        return reply({ content: `✅ \`${name}\` → **${team}**${warn}`, flags: EPHEMERAL });
-      }
-      if (sub === "unassign" && repo) {
-        const r = await env.DB.prepare("DELETE FROM repo_team WHERE repo = ? COLLATE NOCASE").bind(repo).run();
-        return r.meta.changes
-          ? reply({ content: `✅ \`${repo}\`을(를) TF에서 뺐습니다.`, flags: EPHEMERAL })
-          : error(`\`${repo}\`은(는) 배정된 TF가 없습니다.`);
-      }
-      const name = arg("name");
-      if (sub === "rename" && team && name) {
-        const r = await env.DB.prepare("UPDATE repo_team SET team = ? WHERE team = ?").bind(name, team).run();
-        return r.meta.changes
-          ? reply({ content: `✅ **${team}** → **${name}** (레포 ${r.meta.changes}개)`, flags: EPHEMERAL })
-          : error(`**${team}** TF를 찾지 못했습니다.`);
-      }
-      return error("명령을 이해하지 못했습니다.");
+      // list
+      const user = userOf(i);
+      const subs = user ? await listFor(env, user) : [];
+      const org = subs.some((s) => s.kind === "org");
+      const repos = subs.filter((s) => s.kind === "repo").map((s) => s.target);
+      const lines = [org && "**전체 사용량**", repos.length > 0 && `**레포** · ${repos.join(", ")}`].filter(Boolean);
+      return ephemeral({
+        content: lines.length
+          ? `🔔 구독 중인 알림\n${lines.join("\n")}\n-# 같은 대상으로 \`/subscribe\`를 다시 쓰면 해제됩니다.`
+          : "구독 중인 알림이 없습니다.\n-# `/subscribe`나 알림의 🔔 버튼으로 구독할 수 있습니다.",
+      });
     }
   }
   return error("알 수 없는 명령입니다.");
 }
 
 async function autocomplete(env: Env, i: Interaction): Promise<Response> {
-  const { args } = flatten(i.data?.options);
-  const focused = [...args.values()].find((o) => o.focused);
+  const sub = i.data?.options?.find((o) => o.type === 1);
+  const focused = (sub?.options ?? i.data?.options ?? []).find((o) => o.focused);
   const q = (focused?.value ?? "").toLowerCase();
-  let names: string[] = [];
-  if (focused?.name === "team") {
-    const { results } = await env.DB.prepare("SELECT DISTINCT team FROM repo_team ORDER BY team").all<{ team: string }>();
-    names = results.map((r) => r.team);
-    // 조회(/usage)에서는 배정 안 된 레포 묶음도 고를 수 있게 (드롭다운과 같게)
-    if (i.data?.name === "usage") names.push(UNASSIGNED);
-  } else if (focused?.name === "repo") {
-    const [snap, teams] = await Promise.all([loadSnapshot(env), loadTeams(env)]);
-    names = [...new Set([...(snap?.repos.map((r) => r.name) ?? []), ...teams.keys()])].sort();
-  }
-  const choices = names
-    .filter((n) => n.toLowerCase().includes(q))
+  const snap = await loadSnapshot(env);
+  const choices = (snap?.repos ?? [])
+    .filter((r) => !r.archived && r.name.toLowerCase().includes(q))
+    .map((r) => r.name)
+    .sort()
     .slice(0, 25)
     .map((n) => ({ name: n, value: n }));
   return json({ type: R.AUTOCOMPLETE, data: { choices } });

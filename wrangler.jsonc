@@ -29,14 +29,6 @@
     "ALERT_THRESHOLDS": "50,80,100",
     // 알림을 보낼 디스코드 채널 ID (비우면 로그만 남기고 보내지 않음)
     "ALERT_CHANNEL_ID": "1333427853777440820",
-    // 중요한 알림(무료 분 소진, Actions 정지, 예산 없이 과금) 때 멘션할 역할 ID (선택)
-    "ALERT_MENTION_ROLE_ID": "",
-    // 중요한 알림 때 레포 이름으로 frontend / backend를 골라 태그할 역할 ID (src/roles.ts)
-    // 조직 전체 알림(무료 분 소진)이나 파트를 모르는 레포는 둘 다 태그
-    "FRONTEND_ROLE_ID": "",
-    "BACKEND_ROLE_ID": "",
-    // /team 명령을 쓸 수 있는 역할 ID (비우면 '서버 관리' 권한자만)
-    "ADMIN_ROLE_ID": "",
     // 수집 실패(토큰 만료 등) 알림 때 멘션할 사용자 ID (봇 관리자)
     "FAILURE_MENTION_USER_ID": "660302890899996675"
   }
