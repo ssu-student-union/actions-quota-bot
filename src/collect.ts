@@ -1,7 +1,13 @@
 import { countWorkflows, fetchBudgets, fetchRepos, fetchUsage } from "./github.ts";
 import type { Env, RepoStat, Snapshot } from "./types.ts";
 
-/** GitHub에서 이번 달 사용량·예산·레포 정보를 모아 스냅샷을 만든다. */
+/**
+ * 무료 분은 러너 OS마다 배수로 차감된다 (Linux 1배, Windows 2배, macOS 10배).
+ * 실행 분 표시도 같은 기준으로 맞춰야 "무료 분의 n%"가 GitHub와 일치한다.
+ */
+const minuteMultiplier = (sku: string) => (/macos/i.test(sku) ? 10 : /windows/i.test(sku) ? 2 : 1);
+
+/** GitHub에서 그 달의 사용량·예산·레포 정보를 모아 스냅샷을 만든다. now가 속한 달(UTC) 기준 */
 export async function collect(env: Env, now = new Date()): Promise<Snapshot> {
   const year = now.getUTCFullYear();
   const month = now.getUTCMonth() + 1;
@@ -31,8 +37,9 @@ export async function collect(env: Env, now = new Date()): Promise<Snapshot> {
     net += it.netAmount;
     const s = it.repositoryName ? stat(it.repositoryName) : null;
     if (it.unitType === "Minutes") {
-      usedMinutes += it.quantity;
-      if (s) s.minutes += it.quantity;
+      const m = it.quantity * minuteMultiplier(it.sku);
+      usedMinutes += m;
+      if (s) s.minutes += m;
     }
     if (s) {
       s.gross += it.grossAmount;

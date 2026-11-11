@@ -123,16 +123,20 @@ export async function processAlerts(env: Env, snap: Snapshot, teams: Map<string,
   const sent = new Set(results.map((r) => `${r.month}|${r.scope}|${r.level}`));
   const isSent = (month: string, scope: string, level: number) => sent.has(`${month}|${scope}|${level}`);
 
-  const items: { embed: Embed; buttons?: Button[]; roles?: string[] }[] = [];
-  const records: { month: string; scope: string; level: number }[] = [];
+  type Rec = { month: string; scope: string; level: number };
+  const items: { embed: Embed; buttons?: Button[]; roles?: string[]; records: Rec[] }[] = [];
 
   for (const c of candidates(env, snap, teams)) {
     const fresh = c.levels.filter((l) => !isSent(c.month, c.scope, l));
     if (fresh.length === 0) continue;
     const top = Math.max(...fresh);
-    // 50%를 건너뛰고 바로 85%가 됐으면 80% 알림 하나만 보내고 50%도 보낸 걸로 기록
-    items.push({ embed: c.render(top), buttons: c.buttons, roles: c.critical(top) ? mentionRoles(env, c.repo) : [] });
-    fresh.forEach((level) => records.push({ month: c.month, scope: c.scope, level }));
+    // 50%를 건너뛰고 바로 85%가 됐으면 80% 알림 하나만 보내고 50%도 보낸 걸로 기록. 맨 앞이 실제로 보내는 단계
+    items.push({
+      embed: c.render(top),
+      buttons: c.buttons,
+      roles: c.critical(top) ? mentionRoles(env, c.repo) : [],
+      records: [top, ...fresh.filter((l) => l !== top)].map((level) => ({ month: c.month, scope: c.scope, level })),
+    });
   }
 
   const wf = unbudgetedWorkflowRepos(snap).filter((r) => !isSent("once", `nobudget-wf:${r.name}`, 1));
@@ -149,8 +153,8 @@ export async function processAlerts(env: Env, snap: Snapshot, teams: Map<string,
       ].join("\n"),
       color: COLOR.orange,
       },
+      records: wf.map((r) => ({ month: "once", scope: `nobudget-wf:${r.name}`, level: 1 })),
     });
-    wf.forEach((r) => records.push({ month: "once", scope: `nobudget-wf:${r.name}`, level: 1 }));
   }
 
   if (items.length === 0) return { sent: 0 };
@@ -159,27 +163,46 @@ export async function processAlerts(env: Env, snap: Snapshot, teams: Map<string,
     return { sent: 0, skipped: items.length };
   }
 
-  // 버튼은 메시지 단위로 붙기 때문에 알림마다 메시지를 따로 보낸다.
-  // 멘션은 중요한 알림 메시지에만 붙인다.
-  for (const item of items) {
-    await sendChannelMessage(env, env.ALERT_CHANNEL_ID, {
-      content: item.roles?.length ? item.roles.map((r) => `<@&${r}>`).join(" ") : undefined,
-      embeds: [item.embed],
-      components: item.buttons?.length ? [row(...item.buttons)] : undefined,
-      allowed_mentions: { roles: allRoles(env) },
-    });
-  }
-
+  // 버튼은 메시지 단위로 붙기 때문에 알림마다 메시지를 따로 보낸다. 멘션은 중요한 알림에만.
+  // 크론과 /sync가 동시에 돌아도 한 번만 보내도록, 보내기 전에 기록을 먼저 잡고(INSERT OR IGNORE)
+  // 다른 쪽이 이미 잡았으면 건너뛴다. 보내다 실패하면 잡은 기록을 되돌려 다음 수집 때 다시 보낸다.
   const now = new Date().toISOString();
-  await env.DB.batch(
-    records.map((r) =>
-      env.DB.prepare("INSERT OR IGNORE INTO alerts (month, scope, level, sent_at) VALUES (?, ?, ?, ?)").bind(
-        r.month,
-        r.scope,
-        r.level,
-        now,
-      ),
-    ),
-  );
-  return { sent: items.length };
+  const insert = (r: Rec) =>
+    env.DB.prepare("INSERT OR IGNORE INTO alerts (month, scope, level, sent_at) VALUES (?, ?, ?, ?)").bind(
+      r.month,
+      r.scope,
+      r.level,
+      now,
+    );
+  const remove = (r: Rec) =>
+    env.DB.prepare("DELETE FROM alerts WHERE month = ? AND scope = ? AND level = ? AND sent_at = ?").bind(
+      r.month,
+      r.scope,
+      r.level,
+      now,
+    );
+
+  let sentCount = 0;
+  let firstError: unknown;
+  for (const item of items) {
+    const results = await env.DB.batch(item.records.map(insert));
+    const mine = item.records.filter((_, i) => results[i].meta.changes > 0);
+    // 단계 알림은 실제로 보낼 단계(맨 앞)를, 묶음 알림은 하나라도 잡았는지를 본다
+    const claimed = item.records[0].month === "once" ? mine.length > 0 : results[0].meta.changes > 0;
+    if (!claimed) continue;
+    try {
+      await sendChannelMessage(env, env.ALERT_CHANNEL_ID, {
+        content: item.roles?.length ? item.roles.map((r) => `<@&${r}>`).join(" ") : undefined,
+        embeds: [item.embed],
+        components: item.buttons?.length ? [row(...item.buttons)] : undefined,
+        allowed_mentions: { roles: allRoles(env) },
+      });
+      sentCount++;
+    } catch (e) {
+      await env.DB.batch(mine.map(remove));
+      firstError ??= e;
+    }
+  }
+  if (firstError) throw firstError;
+  return { sent: sentCount };
 }

@@ -20,8 +20,11 @@ async function load(env: Env): Promise<FailState | null> {
 const save = (env: Env, s: FailState) =>
   env.DB.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)").bind(KEY, JSON.stringify(s)).run();
 
-/** GitHub 응답 코드로 원인을 짐작해 한 줄로 */
+const isGitHub = (message: string) => /^GitHub \d/.test(message);
+
+/** 응답 코드로 원인을 짐작해 한 줄로 */
 function hint(message: string) {
+  if (/^Discord \d/.test(message)) return "디스코드 알림 발송에 실패했습니다. 봇 권한이나 알림 채널 설정을 확인해 주시기 바랍니다.";
   if (/GitHub 401/.test(message)) return "GitHub 토큰이 만료됐거나 폐기됐습니다.";
   if (/GitHub 403|GitHub 404/.test(message)) return "토큰 권한이 부족하거나, 토큰 주인이 org 관리자 권한을 잃었습니다.";
   if (/GitHub 5\d\d/.test(message)) return "GitHub 쪽 일시적인 장애일 수 있습니다.";
@@ -39,7 +42,7 @@ export async function reportFailure(env: Env, error: Error) {
     allowed_mentions: { users: who ? [who] : [] },
     embeds: [
       {
-        title: "⚠️ GitHub 사용량을 가져오지 못했습니다",
+        title: isGitHub(error.message) ? "⚠️ GitHub 사용량을 가져오지 못했습니다" : "⚠️ 사용량 확인 중 오류가 발생했습니다",
         description: [
           hint(error.message),
           "고칠 때까지 사용량 알림이 오지 않습니다.",
@@ -49,7 +52,9 @@ export async function reportFailure(env: Env, error: Error) {
         timestamp: new Date().toISOString(),
       },
     ],
-    components: [row(linkButton("토큰 관리", "https://github.com/settings/personal-access-tokens", "🔑"))],
+    components: isGitHub(error.message)
+      ? [row(linkButton("토큰 관리", "https://github.com/settings/personal-access-tokens", "🔑"))]
+      : undefined,
   });
   await save(env, { since: prev?.since ?? new Date().toISOString(), notifiedDay: today });
 }

@@ -2,7 +2,7 @@ import { processAlerts } from "./alerts.ts";
 import { collect, loadSnapshot, loadTeams, saveSnapshot } from "./collect.ts";
 import { actionButton, editOriginal, EPHEMERAL, json, row, select, type MessageBody } from "./discord.ts";
 import { reportRecovery } from "./health.ts";
-import { overviewEmbeds, repoEmbed, teamEmbed, teamListEmbed, teamOptions } from "./format.ts";
+import { overviewEmbeds, repoEmbed, teamEmbed, teamListEmbed, teamOptions, UNASSIGNED } from "./format.ts";
 import type { Env, Snapshot } from "./types.ts";
 
 const T = { PING: 1, COMMAND: 2, COMPONENT: 3, AUTOCOMPLETE: 4 } as const;
@@ -24,12 +24,21 @@ export interface Interaction {
 }
 
 /** 수집 → 저장 → 알림. 크론과 /sync, 새로고침 버튼이 같이 쓴다 */
-export async function runSync(env: Env): Promise<Snapshot> {
-  const snap = await collect(env);
+export async function runSync(env: Env, now = new Date()): Promise<Snapshot> {
+  const snap = await collect(env, now);
   await saveSnapshot(env, snap);
   await reportRecovery(env);
-  const result = await processAlerts(env, snap, await loadTeams(env));
+  const teams = await loadTeams(env);
+  const result = await processAlerts(env, snap, teams);
   console.log(`sync ${snap.month}: ${Math.round(snap.usedMinutes)}분, $${snap.net.toFixed(2)}, 알림 ${JSON.stringify(result)}`);
+
+  // GitHub 데이터는 몇 시간 늦게 들어오므로, 매월 1일에는 지난달 마지막 몇 시간치도 다시 확인한다
+  if (now.getUTCDate() === 1) {
+    const endOfLastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1) - 1);
+    const prev = await collect(env, endOfLastMonth);
+    const prevResult = await processAlerts(env, prev, teams);
+    console.log(`sync ${prev.month} (지난달 재확인): 알림 ${JSON.stringify(prevResult)}`);
+  }
   return snap;
 }
 
@@ -149,6 +158,8 @@ export async function handleInteraction(env: Env, ctx: ExecutionContext, i: Inte
       if (!isAdmin(env, i)) return error("TF 설정은 운영진만 바꿀 수 있습니다.");
       const repo = arg("repo");
       const team = arg("team");
+      const newName = sub === "rename" ? arg("name") : team;
+      if (newName === UNASSIGNED) return error(`'${UNASSIGNED}'은 TF 이름으로 쓸 수 없습니다. 배정을 빼려면 \`/team unassign\`을 쓰시기 바랍니다.`);
       if (sub === "assign" && repo && team) {
         const snap = await loadSnapshot(env);
         const known = snap?.repos.find((r) => r.name.toLowerCase() === repo.toLowerCase());
@@ -184,6 +195,8 @@ async function autocomplete(env: Env, i: Interaction): Promise<Response> {
   if (focused?.name === "team") {
     const { results } = await env.DB.prepare("SELECT DISTINCT team FROM repo_team ORDER BY team").all<{ team: string }>();
     names = results.map((r) => r.team);
+    // 조회(/usage)에서는 배정 안 된 레포 묶음도 고를 수 있게 (드롭다운과 같게)
+    if (i.data?.name === "usage") names.push(UNASSIGNED);
   } else if (focused?.name === "repo") {
     const [snap, teams] = await Promise.all([loadSnapshot(env), loadTeams(env)]);
     names = [...new Set([...(snap?.repos.map((r) => r.name) ?? []), ...teams.keys()])].sort();

@@ -1,3 +1,5 @@
+import { colorFor } from "./format.ts";
+
 // 진행 막대 PNG. 임베드 이미지는 디스코드가 화면 폭에 맞춰 늘리고 줄이므로 데스크톱·모바일 모두 꽉 찬다.
 
 const CRC_TABLE = (() => {
@@ -33,9 +35,9 @@ async function deflate(data: Uint8Array) {
 
 type RGB = [number, number, number];
 const TRACK: RGB = [0x4e, 0x50, 0x58];
-// 디스코드 팔레트 계열: 초록 / 노랑 / 주황 / 빨강
-export const barColor = (p: number): RGB =>
-  p >= 100 ? [0xf2, 0x3f, 0x43] : p >= 80 ? [0xf5, 0x77, 0x31] : p >= 50 ? [0xf0, 0xb2, 0x32] : [0x23, 0xa5, 0x5a];
+const rgb = (hex: number): RGB => [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
+/** 임베드 띠 색(colorFor)과 같은 색 */
+export const barColor = (p: number): RGB => rgb(colorFor(p));
 
 export interface BarShape {
   width: number;

@@ -4,7 +4,8 @@ import type { Env, RepoStat, Snapshot } from "./types.ts";
 
 export const UNASSIGNED = "미배정";
 
-export const COLOR = { green: 0x2ecc71, yellow: 0xf1c40f, orange: 0xe67e22, red: 0xe74c3c, gray: 0x95a5a6 };
+/** 임베드 띠와 막대 이미지(src/png.ts)가 같은 색을 쓰도록 여기서만 정의한다 (디스코드 팔레트 계열) */
+export const COLOR = { green: 0x23a55a, yellow: 0xf0b232, orange: 0xf57731, red: 0xf23f43, gray: 0x80848e };
 
 export const usd = (n: number) => `$${n.toFixed(2)}`;
 export const usdBudget = (n: number) => (Number.isInteger(n) ? `$${n}` : usd(n));
@@ -15,7 +16,7 @@ export const esc = (s: string) => s.replace(/[_*~`|>\\]/g, "\\$&");
 export const monthLabel = (month: string) => `${Number(month.slice(5))}월`;
 
 /** 막대 모양(src/png.ts)을 바꾸면 올린다. 디스코드가 URL 단위로 이미지를 캐시하기 때문 */
-const BAR_VERSION = 2;
+const BAR_VERSION = 3;
 
 /** 진행 막대 이미지 URL (src/png.ts가 그림). 같은 값이면 같은 URL이라 디스코드가 캐시한다 */
 export const barImage = (env: Env, p: number) => ({
@@ -153,7 +154,7 @@ export function teamEmbed(env: Env, snap: Snapshot, teams: Map<string, string>, 
   const net = used.reduce((a, r) => a + r.net, 0);
   const worst = Math.max(0, ...used.map((r) => (r.budget ? pct(r.net, r.budget) : 0)));
   return {
-    title: `${team} · ${monthLabel(snap.month)}`,
+    title: `${monthLabel(snap.month)} ${team} 사용량`,
     description: lines(
       `## ${mins(minutes)}`,
       `무료 분의 ${share(minutes, snap)}`,
@@ -185,7 +186,7 @@ export function repoEmbed(env: Env, snap: Snapshot, teams: Map<string, string>, 
     image = barImage(env, p);
   }
   return {
-    title: `${r.name} · ${monthLabel(snap.month)}`,
+    title: `${monthLabel(snap.month)} ${r.name} 사용량`,
     description: lines(
       `## ${mins(r.minutes)}`,
       `무료 분의 ${share(r.minutes, snap)}`,
