@@ -5,15 +5,12 @@ Cloudflare Workers에서 매시 정각에 돌고, 한도는 GitHub Billing → B
 
 ## 알림
 
-| 알림 | 태그 |
-|---|---|
-| 무료 분 50 / 80% · 레포 예산 50 / 80% | – |
-| 무료 분 소진 | `@frontend` `@backend` |
-| 레포 Actions 정지 (예산 100%) · 예산 없는 레포 과금 | 레포 파트 (`src/roles.ts`) |
-| 예산 없는 레포 발견 | – |
-| 수집 실패 | 봇 관리자 |
+- 무료 분 50 / 80 / 100%
+- 레포 예산 50 / 80 / 100% (100% = Actions 정지)
+- 예산 없는 레포 발견 · 예산 없는 레포 과금
+- 수집 실패 (봇 관리자 멘션)
 
-구독한 사람은 해당 레포 알림마다(단계 무관) 멘션됩니다. 알림·`/usage`의 🔔 버튼으로도 구독할 수 있습니다.
+**구독한 사람만 멘션됩니다.** 무료 분 알림은 "전체 사용량" 구독자, 레포 알림은 그 레포 구독자에게 갑니다.
 
 ## 명령
 
@@ -21,11 +18,9 @@ Cloudflare Workers에서 매시 정각에 돌고, 한도는 GitHub Billing → B
 
 | 명령 | 설명 |
 |---|---|
-| `/usage [team] [repo]` | 사용량 현황 |
+| `/usage` | 사용량 현황 (드롭다운으로 레포 상세) |
 | `/sync` | 지금 다시 수집 |
-| `/subscribe repo\|team\|part\|list` | 레포·TF·프론트/백엔드 전체 알림 구독 (다시 쓰면 해제) |
-| `/team list` | TF별 레포 목록 |
-| `/team assign` · `unassign` · `rename` | TF 설정 (운영진) |
+| `/subscribe all` · `repo` · `list` | 전체 사용량·레포 구독 (다시 쓰면 해제). 알림과 `/usage`의 🔔 버튼으로도 가능 |
 
 ## 배포
 
@@ -44,4 +39,4 @@ pnpm exec wrangler secret put DISCORD_PUBLIC_KEY
 pnpm exec wrangler secret put DISCORD_BOT_TOKEN
 ```
 
-디스코드 Developer Portal의 Interactions Endpoint URL에 Worker URL을 넣습니다. 채널·역할 ID는 `wrangler.jsonc`의 `vars`에 있습니다.
+디스코드 Developer Portal의 Interactions Endpoint URL에 Worker URL을 넣습니다. 채널 ID 등은 `wrangler.jsonc`의 `vars`에 있습니다.
