@@ -1,0 +1,8 @@
+# 로컬 개발용. `cp .dev.vars.example .dev.vars` 후 채우기
+# org owner/billing manager 계정의 토큰 (fine-grained PAT: Organization > Administration: read)
+GITHUB_TOKEN=
+DISCORD_APP_ID=
+DISCORD_PUBLIC_KEY=
+DISCORD_BOT_TOKEN=
+# 명령어를 특정 서버에만 즉시 등록하려면 (비우면 전역 등록, 반영까지 최대 1시간)
+DISCORD_GUILD_ID=
