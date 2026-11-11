@@ -56,6 +56,32 @@ export const commands = [
     ],
   },
   {
+    name: "subscribe",
+    description: "레포·TF·파트 알림을 받거나 끕니다 (다시 쓰면 해제)",
+    options: [
+      { type: SUB_COMMAND, name: "list", description: "내가 구독한 알림을 봅니다" },
+      { type: SUB_COMMAND, name: "repo", description: "레포 알림 받기/끄기", options: [repoOption("레포")] },
+      { type: SUB_COMMAND, name: "team", description: "TF 알림 받기/끄기", options: [teamOption("team", "TF")] },
+      {
+        type: SUB_COMMAND,
+        name: "part",
+        description: "프론트엔드·백엔드 전체 알림 받기/끄기",
+        options: [
+          {
+            type: STRING,
+            name: "part",
+            description: "파트",
+            required: true,
+            choices: [
+              { name: "프론트엔드", value: "frontend" },
+              { name: "백엔드", value: "backend" },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
     name: "sync",
     description: "GitHub에서 사용량을 지금 다시 가져옵니다",
   },

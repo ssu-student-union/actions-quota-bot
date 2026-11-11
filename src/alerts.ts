@@ -2,6 +2,7 @@ import { linkButton, row, sendChannelMessage, type Button, type Embed } from "./
 import { actionsUrl, budgetsUrl } from "./github.ts";
 import { barImage, COLOR, colorFor, dotFor, esc, freeForecast, mins, pct, UNASSIGNED, usd, usdBudget } from "./format.ts";
 import { allRoles, mentionRoles } from "./roles.ts";
+import { subButton, subscribersFor } from "./subscriptions.ts";
 import type { Env, Snapshot } from "./types.ts";
 
 interface Candidate {
@@ -66,7 +67,11 @@ export function candidates(env: Env, snap: Snapshot, teams: Map<string, string>)
         repo: r.name,
         levels: crossed(p, ts),
         critical: (level) => level >= 100, // Actions 정지 / 예산 초과
-        buttons: [linkButton("예산 늘리기", link, "💰"), linkButton("Actions 실행 기록", actionsUrl(env, r.name), "📜")],
+        buttons: [
+          linkButton("예산 늘리기", link, "💰"),
+          linkButton("Actions 실행 기록", actionsUrl(env, r.name), "📜"),
+          subButton("repo", r.name, "이 레포 알림 받기"),
+        ],
         render: (level) => ({
           title:
             level >= 100
@@ -98,7 +103,11 @@ export function candidates(env: Env, snap: Snapshot, teams: Map<string, string>)
         repo: r.name,
         levels: [1],
         critical: () => true, // 멈추지 않고 과금 중
-        buttons: [linkButton("예산 설정하러 가기", link, "💰"), linkButton("Actions 실행 기록", actionsUrl(env, r.name), "📜")],
+        buttons: [
+          linkButton("예산 설정하러 가기", link, "💰"),
+          linkButton("Actions 실행 기록", actionsUrl(env, r.name), "📜"),
+          subButton("repo", r.name, "이 레포 알림 받기"),
+        ],
         render: () => ({
           title: `⚠️ ${r.name} 레포에서 예산 없이 과금되고 있습니다`,
           url: link,
@@ -124,7 +133,8 @@ export async function processAlerts(env: Env, snap: Snapshot, teams: Map<string,
   const isSent = (month: string, scope: string, level: number) => sent.has(`${month}|${scope}|${level}`);
 
   type Rec = { month: string; scope: string; level: number };
-  const items: { embed: Embed; buttons?: Button[]; roles?: string[]; records: Rec[] }[] = [];
+  /** repos: 이 알림과 관련된 레포 (구독자를 찾는 데 씀) */
+  const items: { embed: Embed; buttons?: Button[]; roles?: string[]; repos: string[]; records: Rec[] }[] = [];
 
   for (const c of candidates(env, snap, teams)) {
     const fresh = c.levels.filter((l) => !isSent(c.month, c.scope, l));
@@ -135,6 +145,7 @@ export async function processAlerts(env: Env, snap: Snapshot, teams: Map<string,
       embed: c.render(top),
       buttons: c.buttons,
       roles: c.critical(top) ? mentionRoles(env, c.repo) : [],
+      repos: c.repo ? [c.repo] : [],
       records: [top, ...fresh.filter((l) => l !== top)].map((level) => ({ month: c.month, scope: c.scope, level })),
     });
   }
@@ -153,6 +164,7 @@ export async function processAlerts(env: Env, snap: Snapshot, teams: Map<string,
       ].join("\n"),
       color: COLOR.orange,
       },
+      repos: wf.map((r) => r.name),
       records: wf.map((r) => ({ month: "once", scope: `nobudget-wf:${r.name}`, level: 1 })),
     });
   }
@@ -191,11 +203,14 @@ export async function processAlerts(env: Env, snap: Snapshot, teams: Map<string,
     const claimed = item.records[0].month === "once" ? mine.length > 0 : results[0].meta.changes > 0;
     if (!claimed) continue;
     try {
+      // 중요한 알림은 역할을, 구독한 사람은 단계와 상관없이 그 레포 알림마다 멘션한다
+      const users = await subscribersFor(env, item.repos, teams);
+      const mentions = [...(item.roles ?? []).map((r) => `<@&${r}>`), ...users.map((u) => `<@${u}>`)];
       await sendChannelMessage(env, env.ALERT_CHANNEL_ID, {
-        content: item.roles?.length ? item.roles.map((r) => `<@&${r}>`).join(" ") : undefined,
+        content: mentions.length ? mentions.join(" ") : undefined,
         embeds: [item.embed],
         components: item.buttons?.length ? [row(...item.buttons)] : undefined,
-        allowed_mentions: { roles: allRoles(env) },
+        allowed_mentions: { roles: allRoles(env), users },
       });
       sentCount++;
     } catch (e) {

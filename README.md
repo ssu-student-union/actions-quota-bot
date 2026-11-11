@@ -13,6 +13,8 @@ Cloudflare Workers에서 매시 정각에 돌고, 한도는 GitHub Billing → B
 | 예산 없는 레포 발견 | – |
 | 수집 실패 | 봇 관리자 |
 
+구독한 사람은 해당 레포 알림마다(단계 무관) 멘션됩니다. 알림·`/usage`의 🔔 버튼으로도 구독할 수 있습니다.
+
 ## 명령
 
 응답은 모두 본인에게만 보입니다.
@@ -21,6 +23,7 @@ Cloudflare Workers에서 매시 정각에 돌고, 한도는 GitHub Billing → B
 |---|---|
 | `/usage [team] [repo]` | 사용량 현황 |
 | `/sync` | 지금 다시 수집 |
+| `/subscribe repo\|team\|part\|list` | 레포·TF·프론트/백엔드 전체 알림 구독 (다시 쓰면 해제) |
 | `/team list` | TF별 레포 목록 |
 | `/team assign` · `unassign` · `rename` | TF 설정 (운영진) |
 
