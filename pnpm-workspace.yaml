@@ -1,0 +1,4 @@
+# wrangler가 쓰는 네이티브 바이너리의 설치 스크립트 허용 (없으면 CI 설치가 실패함)
+allowBuilds:
+  esbuild: true
+  workerd: true
